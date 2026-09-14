@@ -1,74 +1,55 @@
+import argparse
+import json
+import os
+import random
 import ssl
-import certifi
+import warnings
+from pathlib import Path
+
+import numpy as np
+import swanlab
+import torch
+from datasets import Dataset as HFDataset
+from sklearn.metrics import (
+    accuracy_score,
+    classification_report,
+    f1_score,
+    recall_score,
+)
+from transformers import (
+    AutoModelForSequenceClassification,
+    AutoTokenizer,
+    DataCollatorWithPadding,
+    EvalPrediction,
+    Trainer,
+    TrainingArguments,
+    set_seed,
+)
+
+try:
+    import certifi
+except ImportError:
+    certifi = None
+
 
 _original_create_default_context = ssl.create_default_context
 
+
 def create_certifi_context(*args, **kwargs):
-    kwargs.setdefault("cafile", certifi.where())
+    if certifi is not None:
+        kwargs.setdefault("cafile", certifi.where())
     return _original_create_default_context(*args, **kwargs)
 
+
 ssl.create_default_context = create_certifi_context
-
-
-import os
-import torch
-import swanlab
-import numpy as np
-from transformers import AutoTokenizer, AutoModelForSequenceClassification, TrainingArguments, Trainer, DataCollatorWithPadding, EvalPrediction
-from datasets import Dataset as HFDataset
-from sklearn.metrics import accuracy_score, f1_score, classification_report
-import warnings
-
 warnings.filterwarnings("ignore")
 
-swanlab_api_key = os.getenv("SWANLAB_API_KEY")
-if swanlab_api_key:
-    swanlab.login(api_key=swanlab_api_key)
 
-
-# 参数配置
-class Config:
-    # 实验标识
-    experiment_name = "batchSize_16"  # 实验名
-    output_dir = f"./outputs/{experiment_name}"  # 每个实验独立目录
-
-    # 数据路径
-    train_data_path = "data_demo1/train_3k.txt"  # 训练集
-    dev_data_path = "data_demo1/dev_1k.txt"  # 验证集
-    test_data_path = "data_demo1/test_1k.txt"  # 测试集
-
-    # 模型参数
-    model_name = os.getenv("MODEL_NAME", "bert-base-chinese")
-    num_labels = 15
-    max_length = 128
-
-    # 训练参数
-    batch_size = 16
-    learning_rate = 2e-5
-    num_epochs = 3
-    warmup_ratio = 0.1
-    weight_decay = 0.01
-
-    # SwanLab配置
-    swanlab_project = "toutiao-text-classification"
-    swanlab_config = {
-        "learning_rate": learning_rate,
-        "batch_size": batch_size,
-        "num_epochs": num_epochs,
-        "max_length": max_length,
-        "model": model_name
-    }
-
-os.makedirs(Config.output_dir, exist_ok=True)
-os.makedirs(os.path.join(Config.output_dir, "checkpoints"), exist_ok=True)
-os.makedirs(os.path.join(Config.output_dir, "logs"), exist_ok=True)
-
-
-# 类别映射：根据数据集文档，分类code对应的类别名称
+# 类别映射：根据数据集文档，分类 code 对应的类别名称
 CODE2LABEL = {
     100: "民生", 101: "文化", 102: "娱乐", 103: "体育", 104: "财经",
     106: "房产", 107: "汽车", 108: "教育", 109: "科技", 110: "军事",
-    112: "旅游", 113: "国际", 114: "股票", 115: "农业", 116: "电竞"
+    112: "旅游", 113: "国际", 114: "股票", 115: "农业", 116: "电竞",
 }
 
 CODE2ID = {code: i for i, code in enumerate(CODE2LABEL.keys())}
@@ -76,23 +57,71 @@ ID2LABEL = {i: name for i, name in enumerate(CODE2LABEL.values())}
 LABEL2ID = {name: i for i, name in ID2LABEL.items()}
 
 
-# 解析数据集的单行数据
+CONFIG_KEYS = [
+    "experiment_name",
+    "output_dir",
+    "train_data_path",
+    "dev_data_path",
+    "test_data_path",
+    "model_name",
+    "num_labels",
+    "max_length",
+    "batch_size",
+    "learning_rate",
+    "num_epochs",
+    "warmup_ratio",
+    "weight_decay",
+    "logging_steps",
+    "save_total_limit",
+    "seed",
+    "use_swanlab",
+    "swanlab_project",
+    "report_to",
+]
+
+
+def load_config(config_path: str) -> dict:
+    path = Path(config_path)
+    if not path.exists():
+        raise FileNotFoundError(f"配置文件不存在：{config_path}")
+
+    with path.open("r", encoding="utf-8") as f:
+        config = json.load(f)
+
+    missing_keys = [key for key in CONFIG_KEYS if key not in config]
+    if missing_keys:
+        raise ValueError(f"配置文件缺少必要参数：{missing_keys}")
+
+    config["model_name"] = os.getenv("MODEL_NAME", config["model_name"])
+    return config
+
+
+def set_global_seed(seed: int):
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
+    set_seed(seed)
+
+
 def parse_line(line: str):
     parts = line.strip().split("_!_")
     if len(parts) < 4:
         return None
-    news_id, code_str, category_name, title = parts[0], parts[1], parts[2], parts[3]
+
+    _news_id, code_str, _category_name, title = parts[0], parts[1], parts[2], parts[3]
     try:
         label = CODE2ID[int(code_str)]
-    except ValueError:
+    except (KeyError, ValueError):
         return None
-    # 只保留标题作为文本，关键词可选拼接
+
     text = title.strip()
     if not text:
         return None
     return text, label
 
-# 加载数据集文件
+
 def load_data(file_path: str):
     samples = []
     with open(file_path, "r", encoding="utf-8") as f:
@@ -105,139 +134,170 @@ def load_data(file_path: str):
                 samples.append({"text": text, "label": label})
     return samples
 
-# 加载数据集
-print("-------加载数据中-------")
-train_samples = load_data(Config.train_data_path)
-dev_samples = load_data(Config.dev_data_path)
-test_samples = load_data(Config.test_data_path)
 
-print(f"训练集：{len(train_samples)} 条，验证集：{len(dev_samples)} 条，测试集：{len(test_samples)} 条")
+def build_dataset(samples, tokenizer, max_length: int):
+    dataset = HFDataset.from_list(samples)
 
-# 转换为 Hugging Face Dataset 格式
-train_dataset = HFDataset.from_list(train_samples)
-dev_dataset = HFDataset.from_list(dev_samples)
-test_dataset = HFDataset.from_list(test_samples)
+    def tokenize_function(examples):
+        return tokenizer(
+            examples["text"],
+            truncation=True,
+            padding=False,
+            max_length=max_length,
+            return_tensors=None,
+        )
 
-
-print("-------加载分词器与模型-------")
-# 加载分词器
-tokenizer = AutoTokenizer.from_pretrained(Config.model_name)
-
-# 对文本进行分词
-def tokenize_function(examples):
-    return tokenizer(
-        examples["text"],
-        truncation=True,
-        padding=False,
-        max_length=Config.max_length,
-        return_tensors=None
-    )
-
-# 对数据集进行分词
-train_dataset = train_dataset.map(tokenize_function, batched=True)
-dev_dataset = dev_dataset.map(tokenize_function, batched=True)
-test_dataset = test_dataset.map(tokenize_function, batched=True)
-
-# 设置数据集格式（指定标签列）
-train_dataset = train_dataset.rename_column("label", "labels")
-dev_dataset = dev_dataset.rename_column("label", "labels")
-test_dataset = test_dataset.rename_column("label", "labels")
-
-# 设置输出格式
-train_dataset.set_format(type="torch", columns=["input_ids", "attention_mask", "labels"])
-dev_dataset.set_format(type="torch", columns=["input_ids", "attention_mask", "labels"])
-test_dataset.set_format(type="torch", columns=["input_ids", "attention_mask", "labels"])
+    dataset = dataset.map(tokenize_function, batched=True)
+    dataset = dataset.rename_column("label", "labels")
+    dataset.set_format(type="torch", columns=["input_ids", "attention_mask", "labels"])
+    return dataset
 
 
-# 加载模型
-model = AutoModelForSequenceClassification.from_pretrained(
-    Config.model_name,
-    num_labels=Config.num_labels,
-    id2label=ID2LABEL,
-    label2id=LABEL2ID
-)
-
-
-# 定义评估指标，计算准确率和 F1分数
 def compute_metrics(eval_pred: EvalPrediction):
     predictions, labels = eval_pred
     predictions = np.argmax(predictions, axis=1)
-    acc = accuracy_score(labels, predictions)
-    f1 = f1_score(labels, predictions, average="weighted")
-    return {"accuracy": acc, "F1_weighted": f1}
+
+    metrics = {
+        "accuracy": accuracy_score(labels, predictions),
+        "weighted_f1": f1_score(labels, predictions, average="weighted", zero_division=0),
+        "macro_f1": f1_score(labels, predictions, average="macro", zero_division=0),
+    }
+
+    recalls = recall_score(
+        labels,
+        predictions,
+        labels=list(ID2LABEL.keys()),
+        average=None,
+        zero_division=0,
+    )
+    for label_id, recall in zip(ID2LABEL.keys(), recalls):
+        metrics[f"recall_{label_id}_{ID2LABEL[label_id]}"] = recall
+
+    return metrics
 
 
-# 配置 SwanLab 可视化
-swanlab.init(
-    project=Config.swanlab_project,
-    experiment_name=Config.experiment_name,
-    config=Config.swanlab_config
-)
+def setup_swanlab(config: dict):
+    if not config["use_swanlab"]:
+        return False
 
-# 启动 TensorBoard → SwanLab 同步（用于捕获 Trainer 的日志）
-swanlab.sync_tensorboard_torch()
+    swanlab_api_key = os.getenv("SWANLAB_API_KEY")
+    if swanlab_api_key:
+        swanlab.login(api_key=swanlab_api_key)
 
-
-# 配置训练参数
-training_args = TrainingArguments(
-    output_dir=os.path.join(Config.output_dir, "checkpoints"),
-    num_train_epochs=Config.num_epochs,
-    per_device_train_batch_size=Config.batch_size,
-    per_device_eval_batch_size=Config.batch_size,
-    learning_rate=Config.learning_rate,
-    weight_decay=Config.weight_decay,
-    warmup_ratio=Config.warmup_ratio,
-    logging_dir=os.path.join(Config.output_dir, "logs"),
-    logging_steps=50,
-    eval_strategy="epoch",
-    save_strategy="epoch",
-    load_best_model_at_end=True,
-    metric_for_best_model="accuracy",
-    greater_is_better=True,
-    save_total_limit=2,
-    report_to="tensorboard",
-    seed=42
-)
+    swanlab.init(
+        project=config["swanlab_project"],
+        experiment_name=config["experiment_name"],
+        config=config,
+    )
+    swanlab.sync_tensorboard_torch()
+    return True
 
 
-# 创建 Data Collator
-data_collator = DataCollatorWithPadding(tokenizer=tokenizer, padding=True)
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--config", default="config.json", help="Path to config JSON file.")
+    args = parser.parse_args()
 
-# 创建 Trainer 并训练
-trainer = Trainer(
-    model=model,
-    args=training_args,
-    train_dataset=train_dataset,
-    eval_dataset=dev_dataset,
-    tokenizer=tokenizer,
-    data_collator=data_collator,
-    compute_metrics=compute_metrics,
-)
+    config = load_config(args.config)
+    if config["num_labels"] != len(ID2LABEL):
+        raise ValueError("num_labels must match the number of labels in CODE2LABEL.")
 
-print("开始训练！")
-trainer.train()
+    set_global_seed(config["seed"])
+
+    output_dir = config["output_dir"]
+    os.makedirs(output_dir, exist_ok=True)
+    os.makedirs(os.path.join(output_dir, "checkpoints"), exist_ok=True)
+    os.makedirs(os.path.join(output_dir, "logs"), exist_ok=True)
+
+    print("-------加载数据中-------")
+    train_samples = load_data(config["train_data_path"])
+    dev_samples = load_data(config["dev_data_path"])
+    test_samples = load_data(config["test_data_path"])
+    print(
+        f"训练集：{len(train_samples)} 条，"
+        f"验证集：{len(dev_samples)} 条，"
+        f"测试集：{len(test_samples)} 条"
+    )
+
+    print("-------加载分词器与模型-------")
+    tokenizer = AutoTokenizer.from_pretrained(config["model_name"])
+    train_dataset = build_dataset(train_samples, tokenizer, config["max_length"])
+    dev_dataset = build_dataset(dev_samples, tokenizer, config["max_length"])
+    test_dataset = build_dataset(test_samples, tokenizer, config["max_length"])
+
+    model = AutoModelForSequenceClassification.from_pretrained(
+        config["model_name"],
+        num_labels=config["num_labels"],
+        id2label=ID2LABEL,
+        label2id=LABEL2ID,
+    )
+
+    swanlab_started = False
+    try:
+        swanlab_started = setup_swanlab(config)
+
+        training_args = TrainingArguments(
+            output_dir=os.path.join(output_dir, "checkpoints"),
+            num_train_epochs=config["num_epochs"],
+            per_device_train_batch_size=config["batch_size"],
+            per_device_eval_batch_size=config["batch_size"],
+            learning_rate=config["learning_rate"],
+            weight_decay=config["weight_decay"],
+            warmup_ratio=config["warmup_ratio"],
+            logging_dir=os.path.join(output_dir, "logs"),
+            logging_steps=config["logging_steps"],
+            eval_strategy="epoch",
+            save_strategy="epoch",
+            load_best_model_at_end=True,
+            metric_for_best_model="macro_f1",
+            greater_is_better=True,
+            save_total_limit=config["save_total_limit"],
+            report_to=config["report_to"],
+            seed=config["seed"],
+            data_seed=config["seed"],
+        )
+
+        data_collator = DataCollatorWithPadding(tokenizer=tokenizer, padding=True)
+        trainer = Trainer(
+            model=model,
+            args=training_args,
+            train_dataset=train_dataset,
+            eval_dataset=dev_dataset,
+            tokenizer=tokenizer,
+            data_collator=data_collator,
+            compute_metrics=compute_metrics,
+        )
+
+        print("开始训练！")
+        trainer.train()
+
+        save_path = os.path.join(output_dir, "best_model")
+        trainer.save_model(save_path)
+        tokenizer.save_pretrained(save_path)
+        print(f"验证集 Macro-F1 最优模型已保存至：{save_path}！")
+
+        print("\n测试集评估：")
+        test_predictions = trainer.predict(test_dataset, metric_key_prefix="test")
+        print(test_predictions.metrics)
+
+        pred_labels = np.argmax(test_predictions.predictions, axis=1)
+        true_labels = test_predictions.label_ids
+        print("\n详细分类报告：")
+        print(
+            classification_report(
+                true_labels,
+                pred_labels,
+                labels=list(ID2LABEL.keys()),
+                target_names=list(ID2LABEL.values()),
+                zero_division=0,
+            )
+        )
+    finally:
+        if swanlab_started:
+            swanlab.finish()
+
+    print("训练完成！")
 
 
-# 保存模型
-save_path = os.path.join(Config.output_dir, "best_model")
-model.save_pretrained(save_path)
-tokenizer.save_pretrained(save_path)
-print(f"模型已保存至：{save_path}！")
-
-
-# 在测试集上进行评估
-test_results = trainer.evaluate(test_dataset)
-print(f"测试集结果：{test_results}")
-
-# 详细分类报告
-print("\n 详细分类报告：")
-predictions = trainer.predict(test_dataset)
-pred_labels = np.argmax(predictions.predictions, axis=1)
-true_labels = predictions.label_ids
-print(classification_report(true_labels, pred_labels, target_names=list(ID2LABEL.values())))
-
-# 关闭 swanlab，结束训练
-swanlab.finish()
-print("训练完成！")
-
-
+if __name__ == "__main__":
+    main()

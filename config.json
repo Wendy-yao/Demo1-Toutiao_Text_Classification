@@ -1,0 +1,21 @@
+{
+  "experiment_name": "batchSize_16",
+  "output_dir": "./outputs/batchSize_16",
+  "train_data_path": "data_demo1/train_3k.txt",
+  "dev_data_path": "data_demo1/dev_1k.txt",
+  "test_data_path": "data_demo1/test_1k.txt",
+  "model_name": "bert-base-chinese",
+  "num_labels": 15,
+  "max_length": 128,
+  "batch_size": 16,
+  "learning_rate": 2e-5,
+  "num_epochs": 3,
+  "warmup_ratio": 0.1,
+  "weight_decay": 0.01,
+  "logging_steps": 50,
+  "save_total_limit": 2,
+  "seed": 42,
+  "use_swanlab": true,
+  "swanlab_project": "toutiao-text-classification",
+  "report_to": "tensorboard"
+}

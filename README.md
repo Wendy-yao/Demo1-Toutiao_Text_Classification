@@ -11,6 +11,7 @@ demo1/
 │   ├── train_3k.txt
 │   ├── dev_1k.txt
 │   └── test_1k.txt
+├── config.json
 ├── requirements.txt
 ├── README.md
 └── .gitignore
@@ -59,10 +60,22 @@ $env:MODEL_NAME="D:\demo1\models\bert-base-chinese"
 
 请将路径替换为你自己的模型路径。
 
+## 配置文件
+
+训练参数集中写在 `config.json` 中，例如 batch size、学习率、训练轮数、数据路径、输出路径和随机种子。
+
+如果要调整参数，优先修改 `config.json`，不需要直接改 `demo1.py`。
+
 ## 运行
 
 ```powershell
 python demo1.py
+```
+
+也可以指定其他配置文件：
+
+```powershell
+python demo1.py --config config.json
 ```
 
 ## 数据说明
