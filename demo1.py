@@ -1,48 +1,26 @@
-import argparse
-import json
-import os
-import random
 import ssl
-import warnings
-from pathlib import Path
-
-import numpy as np
-import swanlab
-import torch
-from datasets import Dataset as HFDataset
-from sklearn.metrics import (
-    accuracy_score,
-    classification_report,
-    f1_score,
-    recall_score,
-)
-from transformers import (
-    AutoModelForSequenceClassification,
-    AutoTokenizer,
-    DataCollatorWithPadding,
-    EvalPrediction,
-    Trainer,
-    TrainingArguments,
-    set_seed,
-)
-
-try:
-    import certifi
-except ImportError:
-    certifi = None
-
+import certifi
 
 _original_create_default_context = ssl.create_default_context
 
-
 def create_certifi_context(*args, **kwargs):
-    if certifi is not None:
-        kwargs.setdefault("cafile", certifi.where())
+    kwargs.setdefault("cafile", certifi.where())
     return _original_create_default_context(*args, **kwargs)
 
-
 ssl.create_default_context = create_certifi_context
+
+
+import os
+import json
+import swanlab
+import warnings
+import numpy as np
+from transformers import AutoTokenizer, AutoModelForSequenceClassification, TrainingArguments, Trainer, DataCollatorWithPadding, EvalPrediction, set_seed
+from datasets import Dataset as HFDataset
+from sklearn.metrics import accuracy_score, f1_score, recall_score, classification_report
+
 warnings.filterwarnings("ignore")
+CONFIG_PATH = "config.json"
 
 
 # 类别映射：根据数据集文档，分类 code 对应的类别名称
@@ -57,54 +35,16 @@ ID2LABEL = {i: name for i, name in enumerate(CODE2LABEL.values())}
 LABEL2ID = {name: i for i, name in ID2LABEL.items()}
 
 
-CONFIG_KEYS = [
-    "experiment_name",
-    "output_dir",
-    "train_data_path",
-    "dev_data_path",
-    "test_data_path",
-    "model_name",
-    "num_labels",
-    "max_length",
-    "batch_size",
-    "learning_rate",
-    "num_epochs",
-    "warmup_ratio",
-    "weight_decay",
-    "logging_steps",
-    "save_total_limit",
-    "seed",
-    "use_swanlab",
-    "swanlab_project",
-    "report_to",
-]
-
-
-def load_config(config_path: str) -> dict:
-    path = Path(config_path)
-    if not path.exists():
-        raise FileNotFoundError(f"配置文件不存在：{config_path}")
-
-    with path.open("r", encoding="utf-8") as f:
+# 读取 JSON 配置文件
+def load_config(config_path: str = CONFIG_PATH):
+    with open(config_path, "r", encoding="utf-8") as f:
         config = json.load(f)
-
-    missing_keys = [key for key in CONFIG_KEYS if key not in config]
-    if missing_keys:
-        raise ValueError(f"配置文件缺少必要参数：{missing_keys}")
 
     config["model_name"] = os.getenv("MODEL_NAME", config["model_name"])
     return config
 
 
-def set_global_seed(seed: int):
-    random.seed(seed)
-    np.random.seed(seed)
-    torch.manual_seed(seed)
-    if torch.cuda.is_available():
-        torch.cuda.manual_seed_all(seed)
-    set_seed(seed)
-
-
+# 解析数据集中的单行数据
 def parse_line(line: str):
     parts = line.strip().split("_!_")
     if len(parts) < 4:
@@ -116,12 +56,14 @@ def parse_line(line: str):
     except (KeyError, ValueError):
         return None
 
+    # 只保留标题作为文本，关键词可选拼接
     text = title.strip()
     if not text:
         return None
     return text, label
 
 
+# 从文件加载数据，返回样本列表
 def load_data(file_path: str):
     samples = []
     with open(file_path, "r", encoding="utf-8") as f:
@@ -135,24 +77,29 @@ def load_data(file_path: str):
     return samples
 
 
+# 将样本列表转换为 HuggingFace Dataset，并完成分词
 def build_dataset(samples, tokenizer, max_length: int):
+    # 转换为 Hugging Face Dataset 格式
     dataset = HFDataset.from_list(samples)
 
+    # 对文本进行分词
     def tokenize_function(examples):
         return tokenizer(
             examples["text"],
             truncation=True,
             padding=False,
             max_length=max_length,
-            return_tensors=None,
+            return_tensors=None
         )
 
+    # 对数据集进行分词
     dataset = dataset.map(tokenize_function, batched=True)
     dataset = dataset.rename_column("label", "labels")
     dataset.set_format(type="torch", columns=["input_ids", "attention_mask", "labels"])
     return dataset
 
 
+# 定义评估指标，计算准确率、两种 F1分数和召回率
 def compute_metrics(eval_pred: EvalPrediction):
     predictions, labels = eval_pred
     predictions = np.argmax(predictions, axis=1)
@@ -160,7 +107,7 @@ def compute_metrics(eval_pred: EvalPrediction):
     metrics = {
         "accuracy": accuracy_score(labels, predictions),
         "weighted_f1": f1_score(labels, predictions, average="weighted", zero_division=0),
-        "macro_f1": f1_score(labels, predictions, average="macro", zero_division=0),
+        "macro_f1": f1_score(labels, predictions, average="macro", zero_division=0)
     }
 
     recalls = recall_score(
@@ -168,7 +115,7 @@ def compute_metrics(eval_pred: EvalPrediction):
         predictions,
         labels=list(ID2LABEL.keys()),
         average=None,
-        zero_division=0,
+        zero_division=0
     )
     for label_id, recall in zip(ID2LABEL.keys(), recalls):
         metrics[f"recall_{label_id}_{ID2LABEL[label_id]}"] = recall
@@ -176,6 +123,7 @@ def compute_metrics(eval_pred: EvalPrediction):
     return metrics
 
 
+# 配置 SwanLab
 def setup_swanlab(config: dict):
     if not config["use_swanlab"]:
         return False
@@ -187,76 +135,74 @@ def setup_swanlab(config: dict):
     swanlab.init(
         project=config["swanlab_project"],
         experiment_name=config["experiment_name"],
-        config=config,
+        config=config
     )
     swanlab.sync_tensorboard_torch()
     return True
 
 
 def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--config", default="config.json", help="Path to config JSON file.")
-    args = parser.parse_args()
+    # 读取配置
+    config = load_config(CONFIG_PATH)
 
-    config = load_config(args.config)
-    if config["num_labels"] != len(ID2LABEL):
-        raise ValueError("num_labels must match the number of labels in CODE2LABEL.")
+    # 在创建模型之前固定随机种子
+    set_seed(config["seed"])
 
-    set_global_seed(config["seed"])
+    # 创建输出目录
+    os.makedirs(config["output_dir"], exist_ok=True)
+    os.makedirs(os.path.join(config["output_dir"], "checkpoints"), exist_ok=True)
+    os.makedirs(os.path.join(config["output_dir"], "logs"), exist_ok=True)
 
-    output_dir = config["output_dir"]
-    os.makedirs(output_dir, exist_ok=True)
-    os.makedirs(os.path.join(output_dir, "checkpoints"), exist_ok=True)
-    os.makedirs(os.path.join(output_dir, "logs"), exist_ok=True)
-
+    # 加载并处理数据
     print("-------加载数据中-------")
     train_samples = load_data(config["train_data_path"])
     dev_samples = load_data(config["dev_data_path"])
     test_samples = load_data(config["test_data_path"])
-    print(
-        f"训练集：{len(train_samples)} 条，"
-        f"验证集：{len(dev_samples)} 条，"
-        f"测试集：{len(test_samples)} 条"
-    )
+    print(f"训练集：{len(train_samples)} 条，验证集：{len(dev_samples)} 条，测试集：{len(test_samples)} 条")
 
+    # 加载分词器与模型
     print("-------加载分词器与模型-------")
+    # 加载分词器
     tokenizer = AutoTokenizer.from_pretrained(config["model_name"])
     train_dataset = build_dataset(train_samples, tokenizer, config["max_length"])
     dev_dataset = build_dataset(dev_samples, tokenizer, config["max_length"])
     test_dataset = build_dataset(test_samples, tokenizer, config["max_length"])
 
+    # 加载模型
     model = AutoModelForSequenceClassification.from_pretrained(
         config["model_name"],
         num_labels=config["num_labels"],
         id2label=ID2LABEL,
-        label2id=LABEL2ID,
+        label2id=LABEL2ID
     )
 
     swanlab_started = False
     try:
+        # 初始化 SwanLab
         swanlab_started = setup_swanlab(config)
 
+        # 配置 TrainingArguments
         training_args = TrainingArguments(
-            output_dir=os.path.join(output_dir, "checkpoints"),
+            output_dir=os.path.join(config["output_dir"], "checkpoints"),
             num_train_epochs=config["num_epochs"],
             per_device_train_batch_size=config["batch_size"],
             per_device_eval_batch_size=config["batch_size"],
             learning_rate=config["learning_rate"],
             weight_decay=config["weight_decay"],
             warmup_ratio=config["warmup_ratio"],
-            logging_dir=os.path.join(output_dir, "logs"),
+            logging_dir=os.path.join(config["output_dir"], "logs"),
             logging_steps=config["logging_steps"],
             eval_strategy="epoch",
             save_strategy="epoch",
             load_best_model_at_end=True,
-            metric_for_best_model="macro_f1",
+            metric_for_best_model="macro_f1",  # 用验证集 Macro-F1 选择最优模型
             greater_is_better=True,
             save_total_limit=config["save_total_limit"],
             report_to=config["report_to"],
-            seed=config["seed"],
-            data_seed=config["seed"],
+            seed=config["seed"]
         )
 
+        # 配置 Trainer
         data_collator = DataCollatorWithPadding(tokenizer=tokenizer, padding=True)
         trainer = Trainer(
             model=model,
@@ -265,17 +211,20 @@ def main():
             eval_dataset=dev_dataset,
             tokenizer=tokenizer,
             data_collator=data_collator,
-            compute_metrics=compute_metrics,
+            compute_metrics=compute_metrics
         )
 
+        # 训练
         print("开始训练！")
         trainer.train()
 
-        save_path = os.path.join(output_dir, "best_model")
+        # 保存验证集 Macro-F1 最优模型
+        save_path = os.path.join(config["output_dir"], "best_model")
         trainer.save_model(save_path)
         tokenizer.save_pretrained(save_path)
         print(f"验证集 Macro-F1 最优模型已保存至：{save_path}！")
 
+        # 在测试集上预测并输出分类报告
         print("\n测试集评估：")
         test_predictions = trainer.predict(test_dataset, metric_key_prefix="test")
         print(test_predictions.metrics)
@@ -289,10 +238,11 @@ def main():
                 pred_labels,
                 labels=list(ID2LABEL.keys()),
                 target_names=list(ID2LABEL.values()),
-                zero_division=0,
+                zero_division=0
             )
         )
     finally:
+        # 关闭 SwanLab
         if swanlab_started:
             swanlab.finish()
 
