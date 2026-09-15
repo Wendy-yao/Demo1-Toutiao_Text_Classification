@@ -23,7 +23,7 @@ warnings.filterwarnings("ignore")
 CONFIG_PATH = "config.json"
 
 
-# 类别映射：根据数据集文档，分类 code 对应的类别名称
+# 类别映射：根据数据集文档，分类 code 对应的中文类别名称
 CODE2LABEL = {
     100: "民生", 101: "文化", 102: "娱乐", 103: "体育", 104: "财经",
     106: "房产", 107: "汽车", 108: "教育", 109: "科技", 110: "军事",
@@ -79,10 +79,8 @@ def load_data(file_path: str):
 
 # 将样本列表转换为 HuggingFace Dataset，并完成分词
 def build_dataset(samples, tokenizer, max_length: int):
-    # 转换为 Hugging Face Dataset 格式
     dataset = HFDataset.from_list(samples)
 
-    # 对文本进行分词
     def tokenize_function(examples):
         return tokenizer(
             examples["text"],
@@ -92,7 +90,6 @@ def build_dataset(samples, tokenizer, max_length: int):
             return_tensors=None
         )
 
-    # 对数据集进行分词
     dataset = dataset.map(tokenize_function, batched=True)
     dataset = dataset.rename_column("label", "labels")
     dataset.set_format(type="torch", columns=["input_ids", "attention_mask", "labels"])
@@ -162,13 +159,11 @@ def main():
 
     # 加载分词器与模型
     print("-------加载分词器与模型-------")
-    # 加载分词器
     tokenizer = AutoTokenizer.from_pretrained(config["model_name"])
     train_dataset = build_dataset(train_samples, tokenizer, config["max_length"])
     dev_dataset = build_dataset(dev_samples, tokenizer, config["max_length"])
     test_dataset = build_dataset(test_samples, tokenizer, config["max_length"])
 
-    # 加载模型
     model = AutoModelForSequenceClassification.from_pretrained(
         config["model_name"],
         num_labels=config["num_labels"],
@@ -178,10 +173,8 @@ def main():
 
     swanlab_started = False
     try:
-        # 初始化 SwanLab
         swanlab_started = setup_swanlab(config)
 
-        # 配置 TrainingArguments
         training_args = TrainingArguments(
             output_dir=os.path.join(config["output_dir"], "checkpoints"),
             num_train_epochs=config["num_epochs"],
@@ -195,14 +188,13 @@ def main():
             eval_strategy="epoch",
             save_strategy="epoch",
             load_best_model_at_end=True,
-            metric_for_best_model="macro_f1",  # 用验证集 Macro-F1 选择最优模型
+            metric_for_best_model="macro_f1",  # 根据验证集 Macro-F1 选择最优模型
             greater_is_better=True,
             save_total_limit=config["save_total_limit"],
             report_to=config["report_to"],
             seed=config["seed"]
         )
 
-        # 配置 Trainer
         data_collator = DataCollatorWithPadding(tokenizer=tokenizer, padding=True)
         trainer = Trainer(
             model=model,
@@ -214,7 +206,6 @@ def main():
             compute_metrics=compute_metrics
         )
 
-        # 训练
         print("开始训练！")
         trainer.train()
 
