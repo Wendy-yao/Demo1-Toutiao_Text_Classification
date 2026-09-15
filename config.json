@@ -5,7 +5,6 @@
   "dev_data_path": "data_demo1/dev_1k.txt",
   "test_data_path": "data_demo1/test_1k.txt",
   "model_name": "bert-base-chinese",
-  "num_labels": 15,
   "max_length": 128,
   "batch_size": 16,
   "learning_rate": 2e-5,
