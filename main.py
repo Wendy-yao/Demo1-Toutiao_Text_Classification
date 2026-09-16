@@ -49,7 +49,7 @@ def main():
     # 在模型创建之前固定随机种子
     set_seed(config["seed"])
 
-    # 添加时间戳，动态创建目录
+    # 创建目录添加时间戳
     run_timestamp = time.strftime("%Y%m%d_%H%M%S")
     run_dir = os.path.join(config["output_dir"], f"run_{run_timestamp}")
     best_model_dir = os.path.join(run_dir, "best_model")
@@ -61,14 +61,13 @@ def main():
     print(f"使用设备：{device}")
 
     # 加载数据
-    print("------- 加载数据中 -------")
     train_samples = load_data(config["train_data_path"])
     dev_samples = load_data(config["dev_data_path"])
     test_samples = load_data(config["test_data_path"])
-    print(f"训练集：{len(train_samples)} 条，验证集：{len(dev_samples)} 条，测试集：{len(test_samples)} 条")
+    print(f"\n 数据加载完毕\n 训练集：{len(train_samples)} 条，验证集：{len(dev_samples)} 条，测试集：{len(test_samples)} 条")
 
+    print("\n 加载分词器与模型")
     # 分词
-    print("------- 加载分词器与模型 -------")
     tokenizer = AutoTokenizer.from_pretrained(config["model_name"])
     train_dataset = build_dataset(train_samples, tokenizer, config["max_length"])
     dev_dataset = build_dataset(dev_samples, tokenizer, config["max_length"])
@@ -83,7 +82,7 @@ def main():
         tokenizer, config["batch_size"], config["seed"],
     )
 
-    # 优化器 & 调度器
+    # 优化器和调度器
     num_training_steps = len(train_loader) * config["num_epochs"]
     optimizer = build_optimizer(model, config)
     scheduler = build_scheduler(optimizer, config, num_training_steps)
@@ -102,10 +101,10 @@ def main():
             ID2LABEL, best_model_dir, log_fn=log_fn,
         )
         tokenizer.save_pretrained(best_model_dir)
-        print(f"\n最佳模型已保存至：{best_model_dir}")
+        print(f"最佳模型已保存至：{best_model_dir}")
 
         # 加载最佳模型，在测试集上进行评估
-        print("\n加载最佳模型进行测试集评估 ...")
+        print("\n加载最佳模型进行测试集评估")
         model = AutoModelForSequenceClassification.from_pretrained(best_model_dir).to(device)
         test_preds, test_labels = predict(model, test_loader, device)
         test_metrics = all_metrics(test_labels, test_preds, ID2LABEL, prefix="test_")

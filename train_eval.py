@@ -52,7 +52,7 @@ def build_optimizer(model, config):
     return AdamW(grouped, lr=config["learning_rate"])
 
 
-# 构建带 warmup 的线性调度器
+# 构建带 warmup 的线性衰减调度器
 def build_scheduler(optimizer, config, num_training_steps):
     warmup_steps = int(num_training_steps * config["warmup_ratio"])
     return get_linear_schedule_with_warmup(
@@ -96,32 +96,32 @@ def train(model, train_loader, dev_loader, optimizer, scheduler, device, config:
         print(f"\n===== Epoch {epoch}/{config['num_epochs']} =====")
 
         train_loss = train_one_epoch(model, train_loader, optimizer, scheduler, device, epoch)
-        val_preds, val_labels = predict(model, dev_loader, device)
-        val_metrics = all_metrics(val_labels, val_preds, id2label, prefix="val_")
+        eval_preds, eval_labels = predict(model, dev_loader, device)
+        eval_metrics = all_metrics(eval_labels, eval_preds, id2label, prefix="eval_")
 
-        print(f"val_accuracy    = {val_metrics['val_accuracy']:.4f}")
-        print(f"val_macro_f1    = {val_metrics['val_macro_f1']:.4f}")
-        print(f"val_weighted_f1 = {val_metrics['val_weighted_f1']:.4f}")
+        print(f"eval_accuracy    = {eval_metrics['eval_accuracy']:.4f}")
+        print(f"eval_macro_f1    = {eval_metrics['eval_macro_f1']:.4f}")
+        print(f"eval_weighted_f1 = {eval_metrics['eval_weighted_f1']:.4f}")
 
         history.append({
             "epoch": epoch,
             "train_loss": train_loss,
-            **val_metrics,
+            **eval_metrics,
         })
 
         if log_fn is not None:
-            log_fn({"train_loss": train_loss, **val_metrics})
+            log_fn({"train_loss": train_loss, **eval_metrics})
 
         # 根据验证集 macro_f1 保存最佳模型
-        if val_metrics["val_macro_f1"] > best_macro_f1:
-            best_macro_f1 = val_metrics["val_macro_f1"]
+        if eval_metrics["eval_macro_f1"] > best_macro_f1:
+            best_macro_f1 = eval_metrics["eval_macro_f1"]
             best_epoch = epoch
 
             os.makedirs(save_dir, exist_ok=True)
             model.save_pretrained(save_dir)
-            print(f"  >> 保存新的最佳模型 (val_macro_f1={best_macro_f1:.4f}) 到 {save_dir}")
+            print(f"保存新的最佳模型到 {save_dir}")
 
-    print(f"\n训练结束。最佳 epoch = {best_epoch}, 最佳验证集 macro_f1 = {best_macro_f1:.4f}")
+    print(f"\n训练结束。\n 最佳 epoch : {best_epoch}, 最佳验证集: macro_f1 = {best_macro_f1:.4f}")
     return best_epoch, best_macro_f1, history
 
 

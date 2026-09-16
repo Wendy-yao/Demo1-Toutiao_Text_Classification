@@ -34,10 +34,8 @@ def eval_metric(y_true, y_pred, num_labels):
     f1 = np.zeros(num_labels, dtype=np.float64)
 
     for c in range(num_labels):
-        denom_p = tp[c] + fp[c]
-        denom_r = tp[c] + fn[c]
-        precision[c] = tp[c] / denom_p if denom_p > 0 else 0.0
-        recall[c] = tp[c] / denom_r if denom_r > 0 else 0.0
+        precision[c] = tp[c] / (tp[c] + fp[c]) if tp[c] + fp[c] > 0 else 0.0
+        recall[c] = tp[c] / (tp[c] + fn[c]) if tp[c] + fn[c] > 0 else 0.0
         if precision[c] + recall[c] > 0:
             f1[c] = 2 * precision[c] * recall[c] / (precision[c] + recall[c])
 

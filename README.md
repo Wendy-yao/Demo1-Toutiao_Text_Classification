@@ -7,7 +7,6 @@
 ```text
 demo1/
 ├── main.py              # 主入口：串联数据、模型、训练、测试
-├── demo1.py             # 可选兼容入口
 ├── data_load.py         # 配置读取、类别映射、数据解析、Dataset 构建
 ├── model.py             # 模型加载与分类头构建
 ├── train_eval.py        # 手写训练、验证、预测流程
@@ -24,10 +23,10 @@ demo1/
 
 ## 功能说明
 
-- 不再依赖 `transformers.Trainer`，改为手写训练、验证和测试循环。
+- 手写训练、验证和测试循环，不依赖 `transformers.Trainer`。
 - 使用 `DataLoader`、`AdamW`、线性 warmup scheduler 完成模型训练。
 - 使用验证集 `macro_f1` 选择最优模型。
-- 手写实现 `accuracy`、各类别 `precision / recall / F1`、`macro-F1`、`weighted-F1` 和分类报告。
+- 手写实现 `accuracy`、各类别 `precision 、 recall 、 F1`、`macro-F1` 和 `weighted-F1` 。
 - 每次训练会创建带时间戳的实验目录，避免覆盖旧模型。
 - 支持通过 `config.json` 修改训练参数。
 - 支持通过环境变量配置本地模型路径和 SwanLab API Key。
@@ -47,7 +46,6 @@ pip install -r requirements.txt
 ```powershell
 .\venv\Scripts\python.exe -m pip install -r requirements.txt
 ```
-
 
 ## 配置文件
 
@@ -86,7 +84,7 @@ pip install -r requirements.txt
 bert-base-chinese
 ```
 
-如果已经下载了本地模型，可以在 PowerShell 中设置环境变量：
+如果已经下载了本地模型，可以在 PowerShell 中设置环境变量，如：
 
 ```powershell
 $env:MODEL_NAME="D:\demo1\models\bert-base-chinese"
@@ -119,16 +117,10 @@ $env:SWANLAB_API_KEY="你的SwanLab API Key"
 
 ## 运行
 
-推荐运行主入口：
+运行主入口：
 
 ```powershell
 python main.py
-```
-
-如果 `demo1.py` 已经改成兼容入口，也可以运行：
-
-```powershell
-python demo1.py
 ```
 
 ## 训练流程
@@ -145,6 +137,7 @@ python demo1.py
 8. 如果验证集 `macro_f1` 提升，则保存最佳模型
 9. 最后加载最佳模型，在测试集上预测并输出报告
 
+
 ## 指标说明
 
 `metrics.py` 中手写实现了：
@@ -155,7 +148,7 @@ python demo1.py
 - 每个类别的 `F1`
 - `macro_f1`
 - `weighted_f1`
-- 类似 `sklearn.classification_report` 的文本报告
+- 各类别及汇总的文本报告
 
 其中：
 
